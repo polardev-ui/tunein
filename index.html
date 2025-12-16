@@ -121,6 +121,8 @@
         let currentNoiseSource = null;
         let currentAudioElement = null;
         let currentStationKey = null;
+        let lastPlaybackPosition = 0;
+        let allowProgrammaticSeek = false;
 
         const isLocal = window.location.hostname === 'localhost' ||
             window.location.hostname === '127.0.0.1';
@@ -233,6 +235,23 @@
             if (!currentAudioElement) {
                 const audio = new Audio();
                 audio.crossOrigin = 'anonymous';
+                // Treat this like a live radio: prevent manual seeking.
+                audio.controls = false;
+                audio.addEventListener('timeupdate', () => {
+                    if (!audio.paused) {
+                        lastPlaybackPosition = audio.currentTime;
+                    }
+                });
+                audio.addEventListener('seeking', () => {
+                    if (allowProgrammaticSeek) {
+                        // Allow our own sync jumps, then lock again.
+                        allowProgrammaticSeek = false;
+                        lastPlaybackPosition = audio.currentTime;
+                        return;
+                    }
+                    // Block user scrubbing: snap back to last known position.
+                    audio.currentTime = lastPlaybackPosition;
+                });
                 currentAudioElement = audio;
             }
             return currentAudioElement;
@@ -274,6 +293,7 @@
                     if (isFinite(duration) && duration > 0) {
                         const nowSeconds = Date.now() / 1000;
                         const offset = nowSeconds % duration;
+                        allowProgrammaticSeek = true;
                         audio.currentTime = offset;
                     }
                     audio.play().catch(() => {
@@ -360,6 +380,7 @@
                 if (station && station.type === 'loop' && isFinite(currentAudioElement.duration) && currentAudioElement.duration > 0) {
                     const nowSeconds = Date.now() / 1000;
                     const offset = nowSeconds % currentAudioElement.duration;
+                    allowProgrammaticSeek = true;
                     currentAudioElement.currentTime = offset;
                 }
                 currentAudioElement.play().catch(() => {});
