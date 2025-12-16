@@ -1,0 +1,374 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>tune in</title>
+    <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
+    <style>
+        body {
+            background-color: rgb(235, 227, 63);
+            font-family:'Lucida Sans', 'Lucida Sans Regular', 'Lucida Grande', 'Lucida Sans Unicode', Geneva, Verdana, sans-serif;
+            text-align: center;
+            margin-top: 90px;
+        }
+
+        select {
+            border-radius: 25px;
+            height: 32px;
+            width: 190px;
+            padding: 4px 14px;
+            border: 2px solid #333;
+            background-color: #fffdf0;
+            font-size: 14px;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            outline: none;
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+        }
+
+        #playback-controls {
+            margin-top: 12px;
+        }
+
+        #play-pause {
+            border-radius: 50%;
+            width: 48px;
+            height: 48px;
+            border: 2px solid #333;
+            background-color: #fffdf0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
+            outline: none;
+            transition: transform 0.1s ease, box-shadow 0.1s ease, background-color 0.1s ease;
+        }
+
+        #play-pause:disabled {
+            opacity: 0.5;
+            cursor: default;
+            box-shadow: none;
+        }
+
+        #play-pause:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.28);
+            background-color: #fff8d1;
+        }
+
+        #play-pause:active:not(:disabled) {
+            transform: translateY(1px);
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+        }
+
+        #play-pause i {
+            font-size: 24px;
+        }
+
+        .small-info {
+            font-size: 11px;
+            color: #333;
+            margin-top: 4px;
+        }
+
+        .footer {
+            position: fixed;
+            bottom: 10px;
+            width: 100%;
+            text-align: center;
+            font-size: 12px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div>
+        <h1>welcome to tune in</h1>
+        <p>select a radio to begin</p>
+    </div>
+    <select>
+        <option value="fortnite">calm ost</option>
+        <option value="chill">chill noggin</option>
+        <option value="lofi">lofi</option>
+        <option value="beethoven">beethoven</option>
+    </select>
+
+    <div>
+        <p id="now-playing">currently playing: </p>
+        <p id="others-tuned" style="font-size: smaller;">0 others are tuned in with you</p>
+        <div id="playback-controls">
+            <button id="play-pause" disabled>
+                <i class='bx bx-pause'></i>
+            </button>
+        </div>
+    </div>
+
+    <div class="footer">
+        made by josh clark with <b>❤️</b> | there are <span id="global-count">0</span> people tuned in
+    </div>
+    
+    <script>
+        const stationSelect = document.querySelector('select');
+        const nowPlaying = document.getElementById('now-playing');
+        const playPauseButton = document.getElementById('play-pause');
+        const othersTunedElement = document.getElementById('others-tuned');
+        const globalCountElement = document.getElementById('global-count');
+        let tuningTimeoutId = null;
+        let currentAudioContext = null;
+        let currentNoiseSource = null;
+        let currentAudioElement = null;
+        let currentStationKey = null;
+
+        const isLocal = window.location.hostname === 'localhost' ||
+            window.location.hostname === '127.0.0.1';
+        const API_BASE = isLocal ? '' : 'https://api.wsgpolar.me';
+        const STATS_ENDPOINT = API_BASE + '/api/stats';
+        const TUNE_ENDPOINT = API_BASE + '/api/tune';
+
+        const STATIONS = {
+            fortnite: {
+                type: 'loop',
+                label: 'calm ost',
+                src: 'https://media.wsgpolar.me/calm-ost.mp3'
+            },
+            chill: {
+                type: 'loop',
+                label: 'chill noggin',
+                src: 'https://media.wsgpolar.me/chill-noggin.mp3'
+            },
+            lofi: {
+                type: 'live-stream',
+                label: 'lofi',
+                src: 'https://stream.nightride.fm/lofi.mp3'
+            },
+            beethoven: {
+                type: 'loop',
+                label: 'beethoven',
+                src: 'https://media.wsgpolar.me/beethoven.mp3' 
+            },
+        };
+
+        function stopCurrentStatic() {
+            if (currentNoiseSource) {
+                try {
+                    currentNoiseSource.stop();
+                } catch (e) {}
+                currentNoiseSource = null;
+            }
+            if (currentAudioContext) {
+                currentAudioContext.close();
+                currentAudioContext = null;
+            }
+        }
+
+        function playTuningStatic(durationMs) {
+            stopCurrentStatic();
+
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            const audioContext = new AudioContext();
+            const durationSeconds = durationMs / 1000;
+            const sampleRate = audioContext.sampleRate;
+            const bufferSize = Math.floor(sampleRate * durationSeconds);
+
+            const buffer = audioContext.createBuffer(1, bufferSize, sampleRate);
+            const data = buffer.getChannelData(0);
+
+            // Brown-ish noise: accumulate random steps so the spectrum is
+            // weighted more toward low frequencies, for a deeper tuning sound.
+            let lastOut = 0.0;
+            for (let i = 0; i < bufferSize; i++) {
+                const white = Math.random() * 2 - 1;
+                lastOut = (lastOut + (0.02 * white)) / 1.02;
+                data[i] = lastOut * 1.8; // scale down overall level
+            }
+
+            const noiseSource = audioContext.createBufferSource();
+            noiseSource.buffer = buffer;
+
+            const filter = audioContext.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 800;
+            filter.Q.value = 0.9;
+
+            const gainNode = audioContext.createGain();
+            gainNode.gain.value = 0.09; // overall volume
+
+            noiseSource.connect(filter);
+            filter.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            const startTime = audioContext.currentTime;
+            const midTime = startTime + durationSeconds * 0.4;
+            const endTime = startTime + durationSeconds;
+
+            // Slight wobble to feel like a tuning sweep, but kept low and deep
+            filter.frequency.setValueAtTime(300, startTime);
+            filter.frequency.linearRampToValueAtTime(1000, midTime);
+            filter.frequency.linearRampToValueAtTime(400, endTime);
+
+            noiseSource.start();
+            noiseSource.stop(endTime);
+
+            currentAudioContext = audioContext;
+            currentNoiseSource = noiseSource;
+
+            noiseSource.onended = () => {
+                stopCurrentStatic();
+            };
+        }
+
+        function stopCurrentStationAudio() {
+            if (currentAudioElement) {
+                currentAudioElement.pause();
+                currentAudioElement.src = '';
+                currentAudioElement.load();
+                currentAudioElement = null;
+            }
+        }
+
+        function getOrCreateAudioElement() {
+            if (!currentAudioElement) {
+                const audio = new Audio();
+                audio.crossOrigin = 'anonymous';
+                currentAudioElement = audio;
+            }
+            return currentAudioElement;
+        }
+
+        async function notifyTuned(stationKey) {
+            try {
+                await fetch(TUNE_ENDPOINT, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ station: stationKey })
+                });
+            } catch (e) {
+            }
+        }
+
+        function startStationPlayback(stationKey) {
+            const station = STATIONS[stationKey];
+            if (!station || !station.src) {
+                playPauseButton.disabled = true;
+                return;
+            }
+
+            stopCurrentStationAudio();
+
+            const audio = getOrCreateAudioElement();
+            audio.src = station.src;
+            audio.loop = station.type === 'loop';
+
+            playPauseButton.disabled = false;
+            playPauseButton.innerHTML = "<i class='bx bx-pause'></i>";
+
+            if (station.type === 'loop') {
+                audio.addEventListener('loadedmetadata', function handleMeta() {
+                    audio.removeEventListener('loadedmetadata', handleMeta);
+                    const duration = audio.duration;
+                    if (isFinite(duration) && duration > 0) {
+                        const nowSeconds = Date.now() / 1000;
+                        const offset = nowSeconds % duration;
+                        audio.currentTime = offset;
+                    }
+                    audio.play().catch(() => {
+                        // If autoplay is blocked, user can press play
+                    });
+                });
+                audio.load();
+            } else {
+                // live-stream: just play; the stream itself is live
+                audio.play().catch(() => {
+                    // If autoplay is blocked, user can press play
+                });
+            }
+        }
+
+        async function fetchAndUpdateStats() {
+            try {
+                const response = await fetch(STATS_ENDPOINT);
+                if (!response.ok) {
+                    return;
+                }
+                const stats = await response.json();
+                const total = typeof stats.total === 'number' ? stats.total : 0;
+                if (globalCountElement) {
+                    globalCountElement.textContent = total.toString();
+                }
+                if (!othersTunedElement || !currentStationKey) {
+                    return;
+                }
+                const stationCounts = stats.stations || {};
+                const stationCountRaw = stationCounts[currentStationKey];
+                const stationCount = typeof stationCountRaw === 'number' ? stationCountRaw : 0;
+                const others = Math.max(0, stationCount - 1);
+                let label;
+                if (others === 0) {
+                    label = '0 others are tuned in with you';
+                } else if (others === 1) {
+                    label = '1 other is tuned in with you';
+                } else {
+                    label = others + ' others are tuned in with you';
+                }
+                othersTunedElement.textContent = label;
+            } catch (e) {
+            }
+        }
+
+        fetchAndUpdateStats();
+        setInterval(fetchAndUpdateStats, 5000);
+
+        stationSelect.addEventListener('change', () => {
+            const selectedOption = stationSelect.options[stationSelect.selectedIndex];
+            const selectedText = selectedOption.textContent;
+            const selectedValue = selectedOption.value;
+
+            currentStationKey = selectedValue;
+
+            // Stop any station audio immediately so you only hear tuning
+            stopCurrentStationAudio();
+
+            // Notify backend which station this client is tuned to
+            notifyTuned(selectedValue);
+
+            nowPlaying.textContent = 'currently playing: tuning...';
+
+            if (tuningTimeoutId !== null) {
+                clearTimeout(tuningTimeoutId);
+            }
+
+            playTuningStatic(3000);
+
+            tuningTimeoutId = setTimeout(() => {
+                nowPlaying.textContent = 'currently playing: ' + selectedText;
+                startStationPlayback(selectedValue);
+            }, 3000);
+        });
+
+        playPauseButton.addEventListener('click', () => {
+            if (!currentAudioElement) {
+                return;
+            }
+
+            if (currentAudioElement.paused) {
+                const station = STATIONS[currentStationKey];
+                if (station && station.type === 'loop' && isFinite(currentAudioElement.duration) && currentAudioElement.duration > 0) {
+                    const nowSeconds = Date.now() / 1000;
+                    const offset = nowSeconds % currentAudioElement.duration;
+                    currentAudioElement.currentTime = offset;
+                }
+                currentAudioElement.play().catch(() => {});
+                playPauseButton.innerHTML = "<i class='bx bx-pause'></i>";
+            } else {
+                currentAudioElement.pause();
+                playPauseButton.innerHTML = "<i class='bx bx-play'></i>";
+            }
+        });
+    </script>
+</body>
+</html>
